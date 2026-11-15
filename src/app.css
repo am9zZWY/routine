@@ -1,0 +1,107 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Colors from the "Haushalt – Routine App" design: warm off-white, ink text, one blue accent. */
+:root {
+  --radius: 0.875rem;
+  --background: #fafaf8;
+  --foreground: #141414;
+  --card: #ffffff;
+  --card-foreground: #141414;
+  --popover: #ffffff;
+  --popover-foreground: #141414;
+  --primary: #141414;
+  --primary-foreground: #ffffff;
+  --secondary: #ededea;
+  --secondary-foreground: #141414;
+  --muted: #ededea;
+  --muted-foreground: #6a6a66;
+  --accent: #ededea;
+  --accent-foreground: #141414;
+  --destructive: #b42318;
+  --border: #e6e6e2;
+  --divider: #f0f0ec;
+  --input: #e6e6e2;
+  --ring: #1f4fd1;
+  --brand: #1f4fd1;
+  --brand-foreground: #ffffff;
+  --good: #2e6b4f;
+}
+
+.dark {
+  --background: #141414;
+  --foreground: #f2f2ef;
+  --card: #1d1d1c;
+  --card-foreground: #f2f2ef;
+  --popover: #1d1d1c;
+  --popover-foreground: #f2f2ef;
+  --primary: #f2f2ef;
+  --primary-foreground: #141414;
+  --secondary: #2a2a28;
+  --secondary-foreground: #f2f2ef;
+  --muted: #2a2a28;
+  --muted-foreground: #a3a39e;
+  --accent: #2a2a28;
+  --accent-foreground: #f2f2ef;
+  --destructive: #f97066;
+  --border: #33332f;
+  --divider: #282826;
+  --input: #33332f;
+  --ring: #7a9bff;
+  --brand: #7a9bff;
+  --brand-foreground: #141414;
+  --good: #6fcf97;
+}
+
+@theme inline {
+  --font-sans: "Inter Variable", system-ui, sans-serif;
+  --radius-sm: calc(var(--radius) - 6px);
+  --radius-md: calc(var(--radius) - 4px);
+  --radius-lg: calc(var(--radius) - 2px);
+  --radius-xl: var(--radius);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-divider: var(--divider);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-good: var(--good);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    margin: 0;
+  }
+  button:not(:disabled),
+  [role="button"],
+  label:has(input[type="file"]) {
+    cursor: pointer;
+  }
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+}
