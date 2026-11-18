@@ -110,7 +110,16 @@
     } else if (hash.startsWith("#join=")) {
       const params = new URLSearchParams(hash.slice(1));
       app.hh.code = params.get("join");
-      if (/^[0-9a-f]{32}$/.test(params.get("me") ?? "")) setMeKey(params.get("me"));
+      const key = params.get("me") ?? "";
+      // Never switch silently: a link with someone else's key would merge your routines into their copy.
+      if (
+        /^[0-9a-f]{32}$/.test(key) &&
+        key !== app.meKey &&
+        confirm(
+          "Dieses Gerät mit dem Link verbinden? Deine Routinen und Punkte werden mit denen des anderen Geräts zusammengeführt. Nur bestätigen, wenn der Link von dir selbst stammt.",
+        )
+      )
+        setMeKey(key);
       goto("/settings", { replace: true });
       sync();
       syncMe();

@@ -24,6 +24,8 @@ export async function POST({ request }) {
   const data = await request.json().catch(() => null);
   if (!fileName || !validPersonal(data)) return new Response("Bad data", { status: 400 });
   const merged = merge(read(fileName) ?? blank(), data);
+  // Each upload is within limits, but merging many could grow the file without bound: check the result too.
+  if (!validPersonal(merged)) return new Response("Too much data", { status: 413 });
   write(fileName, merged);
   return json(merged);
 }

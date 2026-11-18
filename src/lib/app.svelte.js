@@ -118,7 +118,7 @@ export async function syncMe() {
       body: mine === lastSent ? undefined : mine,
     });
     if (res.status === 401) app.meState = "denied";
-    else if (res.status === 400) app.meState = "error";
+    else if (res.status === 400 || res.status === 413) app.meState = "error";
     else if (!res.ok) throw new Error();
     else {
       const merged = merge(personal($state.snapshot(state)), await res.json());

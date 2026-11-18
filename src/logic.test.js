@@ -123,6 +123,7 @@ test("share code round-trip drops refs, uses pending time; garbage throws", asyn
 
 test("parseShare rejects garbage", async () => {
   await expect(parseShare("not-a-code!!")).rejects.toThrow();
+  await expect(parseShare("A".repeat(8001))).rejects.toThrow("too long");
   const bad = await shareCode({ name: "x", time: "25:00", tolerance: 5, steps: [{ text: "a" }] });
   await expect(parseShare(bad)).rejects.toThrow();
 });

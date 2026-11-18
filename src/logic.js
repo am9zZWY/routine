@@ -282,6 +282,9 @@ export async function shareCode(routine) {
 }
 
 export async function parseShare(code) {
+  // A real code is a few KB at most; the cap keeps a crafted link from inflating into a huge string (decompression bomb).
+  // ponytail: input cap only, ~1000x inflation of 8 KB is still bounded; stream with a byte limit if that ever matters.
+  if (String(code).length > 8000) throw new Error("Share code too long");
   const bin = atob(String(code).replace(/-/g, "+").replace(/_/g, "/"));
   const data = JSON.parse(
     new TextDecoder().decode(
