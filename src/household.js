@@ -13,38 +13,38 @@ const AREAS = [
 ];
 export const blankHousehold = () => ({ tasks: [], areas: AREAS.map(([name, color]) => ({ name, color })), chores: {} });
 
-const str = (v, max) => typeof v === "string" && v.length <= max;
+const str = (value, max) => typeof value === "string" && value.length <= max;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
-const COLOR = /^#[0-9a-fA-F]{6}$/; // ends up in style attributes on other phones
+export const COLOR = /^#[0-9a-fA-F]{6}$/; // ends up in style attributes on other phones
 const MODES = ["day", "week", "interval", "month"];
 
-function validTask(t) {
+function validTask(task) {
   return (
-    t &&
-    str(t.id, 40) &&
-    str(t.title, 120) &&
-    t.title.trim() &&
-    str(t.area, 40) &&
-    MODES.includes(t.mode) &&
-    Array.isArray(t.days) &&
-    t.days.length <= 7 &&
-    t.days.every((d) => Number.isInteger(d) && d >= 0 && d <= 6) &&
-    Number.isInteger(t.every) &&
-    t.every >= 1 &&
-    t.every <= 52 &&
-    (t.anchor === undefined || (str(t.anchor, 10) && DAY.test(t.anchor))) &&
-    (t.note === undefined || str(t.note, 2000))
+    task &&
+    str(task.id, 40) &&
+    str(task.title, 120) &&
+    task.title.trim() &&
+    str(task.area, 40) &&
+    MODES.includes(task.mode) &&
+    Array.isArray(task.days) &&
+    task.days.length <= 7 &&
+    task.days.every((weekday) => Number.isInteger(weekday) && weekday >= 0 && weekday <= 6) &&
+    Number.isInteger(task.every) &&
+    task.every >= 1 &&
+    task.every <= 52 &&
+    (task.anchor === undefined || (str(task.anchor, 10) && DAY.test(task.anchor))) &&
+    (task.note === undefined || str(task.note, 2000))
   );
 }
-const pickTask = (t) => ({
-  id: t.id,
-  title: t.title,
-  area: t.area,
-  mode: t.mode,
-  days: t.days,
-  every: t.every,
-  anchor: t.anchor,
-  note: t.note ?? "",
+const pickTask = (task) => ({
+  id: task.id,
+  title: task.title,
+  area: task.area,
+  mode: task.mode,
+  days: task.days,
+  every: task.every,
+  anchor: task.anchor,
+  note: task.note ?? "",
 });
 
 // Returns false for a malformed op (the server rejects the whole request then).
@@ -67,37 +67,37 @@ export function validOp(op) {
         op.tasks.every(validTask) &&
         Array.isArray(op.areas) &&
         op.areas.length <= 50 &&
-        op.areas.every((a) => validOp({ t: "area", area: a }))
+        op.areas.every((area) => validOp({ t: "area", area }))
       );
     default:
       return false;
   }
 }
 
-// Mutates `h` in place.
-export function applyOp(h, op) {
+// Mutates `household` in place.
+export function applyOp(household, op) {
   if (op.t === "task") {
-    const i = h.tasks.findIndex((x) => x.id === op.task.id);
-    if (i >= 0) h.tasks[i] = pickTask(op.task);
-    else h.tasks.push(pickTask(op.task));
+    const index = household.tasks.findIndex((task) => task.id === op.task.id);
+    if (index >= 0) household.tasks[index] = pickTask(op.task);
+    else household.tasks.push(pickTask(op.task));
   } else if (op.t === "deltask") {
-    h.tasks = h.tasks.filter((x) => x.id !== op.id);
+    household.tasks = household.tasks.filter((task) => task.id !== op.id);
   } else if (op.t === "area") {
     const name = op.area.name.trim();
-    if (!h.areas.some((a) => a.name.toLowerCase() === name.toLowerCase()))
-      h.areas.splice(Math.max(0, h.areas.length - 1), 0, { name, color: op.area.color }); // keep "Allgemein" last
+    if (!household.areas.some((area) => area.name.toLowerCase() === name.toLowerCase()))
+      household.areas.splice(Math.max(0, household.areas.length - 1), 0, { name, color: op.area.color }); // keep "Allgemein" last
   } else if (op.t === "delarea") {
     if (op.name === GENERAL) return;
-    for (const t of h.tasks) if (t.area === op.name) t.area = GENERAL;
-    h.areas = h.areas.filter((a) => a.name !== op.name);
+    for (const task of household.tasks) if (task.area === op.name) task.area = GENERAL;
+    household.areas = household.areas.filter((area) => area.name !== op.name);
   } else if (op.t === "chore") {
-    const k = `${op.id}@${op.day}`;
-    if (op.by === null) delete h.chores[k];
-    else h.chores[k] = op.by || true; // value = who did it (name), or true if unnamed
+    const key = `${op.id}@${op.day}`;
+    if (op.by === null) delete household.chores[key];
+    else household.chores[key] = op.by || true; // value = who did it (name), or true if unnamed
   } else if (op.t === "seed") {
     // One-time upload of tasks made before the server existed; only into an empty household.
-    if (h.tasks.length) return;
-    for (const a of op.areas) applyOp(h, { t: "area", area: a });
-    h.tasks = op.tasks.map(pickTask);
+    if (household.tasks.length) return;
+    for (const area of op.areas) applyOp(household, { t: "area", area });
+    household.tasks = op.tasks.map(pickTask);
   }
 }

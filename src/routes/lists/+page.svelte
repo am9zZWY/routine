@@ -8,12 +8,14 @@
   import SettingsBtn from "#lib/components/app/SettingsBtn.svelte";
   import { Camera, ChartColumn, ChevronRight, Grid2x2, Lock, NotebookText } from "@lucide/svelte";
 
-  const s = app.s;
+  const appState = app.state;
   const now = $derived(app.now);
   const today = $derived(app.today);
   const sorted = $derived(app.sorted);
   const areaGroups = $derived(
-    s.areas.map((a) => ({ ...a, items: s.tasks.filter((t) => areaOf(t.area).name === a.name) })).filter((g) => g.items.length),
+    appState.areas
+      .map((area) => ({ ...area, items: appState.tasks.filter((task) => areaOf(task.area).name === area.name) }))
+      .filter((group) => group.items.length),
   );
 </script>
 
@@ -28,7 +30,7 @@
       ["home", "Haushalt"],
     ]}
     get={() => app.listTab}
-    set={(v) => (app.listTab = v)}
+    set={(value) => (app.listTab = value)}
     label="Liste wählen"
   />
 </header>
@@ -38,24 +40,24 @@
       <h2 class={sectionLabel}>Routinen · nur für dich</h2>
       {#if sorted.length}
         <Card.Root class={listCard}>
-          {#each sorted as r (r.id)}
-            {@const ok = canEdit(s, r, now)}
-            {@const c = cfg(r, today)}
+          {#each sorted as routine (routine.id)}
+            {@const ok = canEdit(appState, routine, now)}
+            {@const config = cfg(routine, today)}
             <a
-              href={ok ? `/routine/${r.id}` : undefined}
+              href={ok ? `/routine/${routine.id}` : undefined}
               aria-disabled={!ok}
               class="{row} min-h-16 gap-3.5 pr-3 text-foreground no-underline"
             >
-              <span class="num w-14 text-[15px] font-bold">{c.time}</span>
+              <span class="num w-14 text-[15px] font-bold">{config.time}</span>
               <span class="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span class="text-base font-medium">{r.name}</span>
+                <span class="text-base font-medium">{routine.name}</span>
                 <span class="text-[13px] text-muted-foreground"
-                  >{r.pending
-                    ? `Ab morgen ${r.pending.time} ±${r.pending.tolerance}`
-                    : `Täglich · ±${c.tolerance} Min. · ${summary(r.steps)}`}</span
+                  >{routine.pending
+                    ? `Ab morgen ${routine.pending.time} ±${routine.pending.tolerance}`
+                    : `Täglich · ±${config.tolerance} Min. · ${summary(routine.steps)}`}</span
                 >
               </span>
-              {#if r.steps.some((x) => x.type === "photo")}<Camera
+              {#if routine.steps.some((step) => step.type === "photo")}<Camera
                   size={16}
                   strokeWidth={1.75}
                   class="text-muted-foreground"
@@ -85,17 +87,23 @@
       ><ChartColumn size={16} strokeWidth={2} aria-hidden="true" /> Verlauf und Punkte</a
     >
   {:else}
-    {#each areaGroups as g (g.name)}
+    {#each areaGroups as group (group.name)}
       <section class="flex flex-col gap-2">
         <h2 class="{sectionLabel} flex items-center gap-2">
-          <span class="size-2.5 rounded-full" style="background: {g.color}"></span>{g.name}
+          <span class="size-2.5 rounded-full" style="background: {group.color}"></span>{group.name}
         </h2>
         <Card.Root class={listCard}>
-          {#each g.items as t (t.id)}
-            <a href="/task/{t.id}" class="{row} pr-3 text-foreground no-underline">
-              <span class="flex-1 text-base font-medium">{t.title}</span>
-              {#if t.note}<NotebookText size={16} strokeWidth={1.75} class="text-muted-foreground" role="img" aria-label="Hat Notiz" />{/if}
-              <span class="text-[13px] whitespace-nowrap text-muted-foreground">{rhythm(t)}</span>
+          {#each group.items as task (task.id)}
+            <a href="/task/{task.id}" class="{row} pr-3 text-foreground no-underline">
+              <span class="flex-1 text-base font-medium">{task.title}</span>
+              {#if task.note}<NotebookText
+                  size={16}
+                  strokeWidth={1.75}
+                  class="text-muted-foreground"
+                  role="img"
+                  aria-label="Hat Notiz"
+                />{/if}
+              <span class="text-[13px] whitespace-nowrap text-muted-foreground">{rhythm(task)}</span>
               <ChevronRight size={16} strokeWidth={2} class="text-muted-foreground/70" aria-hidden="true" />
             </a>
           {/each}

@@ -2,34 +2,36 @@
 import { immutable, assets } from "$app/manifest";
 import { version } from "$app/env";
 
-const C = `routine-${version}`;
+const CACHE = `routine-${version}`;
 const SHELL = "/";
-const PRECACHE = [SHELL, ...immutable.map((f) => f.path), ...assets.map((f) => f.path)].map((p) => (p.startsWith("/") ? p : "/" + p));
+const PRECACHE = [SHELL, ...immutable.map((file) => file.path), ...assets.map((file) => file.path)].map((path) =>
+  path.startsWith("/") ? path : "/" + path,
+);
 
-self.addEventListener("install", (e) => {
+self.addEventListener("install", (event) => {
   self.skipWaiting();
-  e.waitUntil(caches.open(C).then((c) => c.addAll(PRECACHE)));
+  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(PRECACHE)));
 });
 
-self.addEventListener("activate", (e) => {
-  e.waitUntil(
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== C).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key))))
       .then(() => self.clients.claim()),
   );
 });
 
-self.addEventListener("fetch", (e) => {
-  const url = new URL(e.request.url);
+self.addEventListener("fetch", (event) => {
+  const url = new URL(event.request.url);
   // /api/ is live household data: never cache it.
-  if (e.request.method !== "GET" || url.origin !== location.origin || url.pathname.startsWith("/api/")) return;
-  e.respondWith(
+  if (event.request.method !== "GET" || url.origin !== location.origin || url.pathname.startsWith("/api/")) return;
+  event.respondWith(
     (async () => {
-      const c = await caches.open(C);
+      const cache = await caches.open(CACHE);
       // Pages: network first (fresh shell after a deploy), the cached shell when offline.
-      if (e.request.mode === "navigate") return fetch(e.request).catch(() => c.match(SHELL));
-      return (await c.match(e.request)) ?? fetch(e.request);
+      if (event.request.mode === "navigate") return fetch(event.request).catch(() => cache.match(SHELL));
+      return (await cache.match(event.request)) ?? fetch(event.request);
     })(),
   );
 });

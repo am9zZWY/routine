@@ -1,6 +1,8 @@
 <script>
   // Einstellungen: household sharing, export (CSV, print), backup, theme, notifications.
   import { dayKey, addDays, dueOn } from "../../logic.js";
+  import { merge, personal } from "../../personal.js";
+  import qrcode from "qrcode-generator";
   import { app, sync, areaOf, rhythm, pale, DAYS, download, ic, sectionLabel, listCard, row } from "#lib/app.svelte.js";
   import { Button } from "#lib/components/ui/button/index.js";
   import * as Card from "#lib/components/ui/card/index.js";
@@ -8,9 +10,9 @@
   import { Label } from "#lib/components/ui/label/index.js";
   import Back from "#lib/components/app/Back.svelte";
   import Segmented from "#lib/components/app/Segmented.svelte";
-  import { Bell, Printer, Share2 } from "@lucide/svelte";
+  import { Bell, Printer, Share2, Smartphone } from "@lucide/svelte";
 
-  const s = app.s;
+  const appState = app.state;
   const now = $derived(app.now);
   const THEMES = { system: "System", light: "Hell", dark: "Dunkel" };
   const SYNC = {
@@ -29,42 +31,62 @@
           () => (app.banner = "Einladungslink kopiert"),
           () => prompt("Kopier diesen Link", inviteUrl),
         );
+  // Your other devices: the same link plus your personal sync key. Opening it there merges both devices' routines.
+  const deviceUrl = $derived(`${inviteUrl}&me=${app.meKey}`);
+  let deviceQr = $state("");
+  function showDevice() {
+    const qr = qrcode(0, "L");
+    qr.addData(deviceUrl);
+    qr.make();
+    deviceQr = qr.createSvgTag({ cellSize: 4, margin: 16, scalable: true });
+  }
+  const copyDevice = () =>
+    navigator.clipboard.writeText(deviceUrl).then(
+      () => (app.banner = "Link kopiert"),
+      () => prompt("Kopier diesen Link", deviceUrl),
+    );
   const askPermission = async () => {
     app.perm = await Notification.requestPermission();
   };
 
   // Export / print the household week (Mo–So of the current week).
   let scope = $state("all"); // all | week
-  const weekDays = $derived(Array.from({ length: 7 }, (_, i) => dayKey(addDays(now, i - ((now.getDay() + 6) % 7)))));
+  const weekDays = $derived(Array.from({ length: 7 }, (_unused, index) => dayKey(addDays(now, index - ((now.getDay() + 6) % 7)))));
   const planRows = $derived(
-    s.tasks
-      .map((t) => ({ t, due: weekDays.map((d) => dueOn(t, d)) }))
-      .filter((r) => scope === "all" || r.due.some(Boolean))
-      .sort((a, b) => a.due.indexOf(true) - b.due.indexOf(true) || a.t.title.localeCompare(b.t.title)),
+    appState.tasks
+      .map((task) => ({ task, due: weekDays.map((day) => dueOn(task, day)) }))
+      .filter((planRow) => scope === "all" || planRow.due.some(Boolean))
+      .sort((first, second) => first.due.indexOf(true) - second.due.indexOf(true) || first.task.title.localeCompare(second.task.title)),
   );
   const weekLabel = $derived(
     `${new Date(weekDays[0] + "T12:00").toLocaleDateString("de-DE", { day: "numeric", month: "short" })} – ${new Date(weekDays[6] + "T12:00").toLocaleDateString("de-DE", { day: "numeric", month: "long", year: "numeric" })}`,
   );
-  const noted = $derived(planRows.filter((r) => r.t.note));
+  const noted = $derived(planRows.filter((planRow) => planRow.task.note));
   function exportCsv() {
-    const q = (v) => `"${String(v).replace(/"/g, '""')}"`;
-    const lines = [["Aufgabe", "Bereich", "Rhythmus", ...DAYS.map((d) => d[0]), "Notiz"].map(q).join(";")];
-    for (const { t, due } of planRows)
-      lines.push([t.title, areaOf(t.area).name, rhythm(t), ...due.map((x) => (x ? "☐" : "")), t.note ?? ""].map(q).join(";"));
+    const quote = (value) => `"${String(value).replace(/"/g, '""')}"`;
+    const lines = [["Aufgabe", "Bereich", "Rhythmus", ...DAYS.map((dayNames) => dayNames[0]), "Notiz"].map(quote).join(";")];
+    for (const { task, due } of planRows)
+      lines.push(
+        [task.title, areaOf(task.area).name, rhythm(task), ...due.map((isDue) => (isDue ? "☐" : "")), task.note ?? ""].map(quote).join(";"),
+      );
     download(new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv" }), `haushalt-${weekDays[0]}.csv`); // BOM so Excel reads UTF-8
   }
 
   // Backup of the personal data (routines, points, history); the household lives on the server.
-  const exportJson = () => download(new Blob([JSON.stringify(s)], { type: "application/json" }), `routines-${app.today}.json`);
-  async function importJson(ev) {
-    const file = ev.target.files[0];
-    ev.target.value = "";
+  const exportJson = () => download(new Blob([JSON.stringify(appState)], { type: "application/json" }), `routines-${app.today}.json`);
+  async function importJson(event) {
+    const file = event.target.files[0];
+    event.target.value = "";
     if (!file) return;
     try {
-      const d = JSON.parse(await file.text());
-      if (!Array.isArray(d.routines) || !Array.isArray(d.log)) throw new Error();
-      if (!confirm("Alle aktuellen Daten durch dieses Backup ersetzen?")) return;
-      Object.assign(s, { routines: d.routines, log: d.log, progress: d.progress ?? {} });
+      const data = JSON.parse(await file.text());
+      if (!Array.isArray(data.routines) || !Array.isArray(data.log)) throw new Error();
+      if (!confirm("Routinen und Verlauf aus diesem Backup übernehmen?")) return;
+      // Merged, not replaced: with sync on, replaced routines would come back from the server anyway.
+      Object.assign(
+        appState,
+        merge(personal($state.snapshot(appState)), { routines: data.routines, log: data.log, progress: data.progress ?? {}, gone: {} }),
+      );
     } catch {
       alert("Das ist keine gültige Backup-Datei.");
     }
@@ -102,7 +124,7 @@
         </div>
         {#if app.syncState}
           <p class="m-0 text-[13px] font-medium {app.syncState === 'ok' ? 'text-good' : 'text-destructive'}">
-            {SYNC[app.syncState]}{app.syncState === "ok" && s.outbox.length ? ` · ${s.outbox.length} ausstehend` : ""}
+            {SYNC[app.syncState]}{app.syncState === "ok" && appState.outbox.length ? ` · ${appState.outbox.length} ausstehend` : ""}
           </p>
         {/if}
         <Button variant="outline" class="h-11 rounded-lg bg-card text-base text-brand" disabled={app.syncState !== "ok"} onclick={invite}
@@ -123,13 +145,13 @@
           ["week", "Diese Woche"],
         ]}
         get={() => scope}
-        set={(v) => (scope = v)}
+        set={(value) => (scope = value)}
         label="Umfang"
       />
       <Card.Root class={listCard}>
         <button
           onclick={exportCsv}
-          disabled={!s.tasks.length}
+          disabled={!appState.tasks.length}
           class="{row} min-h-16 gap-3.5 bg-transparent text-left text-foreground disabled:opacity-50"
         >
           <span
@@ -144,7 +166,7 @@
         </button>
         <button
           onclick={() => window.print()}
-          disabled={!s.tasks.length}
+          disabled={!appState.tasks.length}
           class="{row} min-h-16 gap-3.5 bg-transparent text-left text-foreground disabled:opacity-50"
         >
           <span class="flex size-9 items-center justify-center rounded-lg" style="background: {pale('#E3B21C')}"
@@ -157,6 +179,26 @@
           >
         </button>
       </Card.Root>
+    </section>
+
+    <section class="flex flex-col gap-2">
+      <h2 class={sectionLabel}>Meine Geräte</h2>
+      <Card.Root class="{listCard} gap-3 p-4">
+        <p class="m-0 text-[13px] font-medium {app.meState === 'ok' ? 'text-good' : 'text-destructive'}">
+          {app.meState === "ok" ? "Routinen werden synchronisiert" : (SYNC[app.meState] ?? "Noch nicht synchronisiert")}
+        </p>
+        <Button variant="outline" class="h-11 rounded-lg bg-card text-base text-brand" disabled={app.meState !== "ok"} onclick={showDevice}
+          ><Smartphone {...ic} /> Anderes Gerät verbinden</Button
+        >
+        {#if deviceQr}
+          <div class="mx-auto w-52 rounded-xl bg-white p-1" aria-label="QR-Code zum Verbinden">{@html deviceQr}</div>
+          <Button variant="secondary" class="h-11 rounded-lg" onclick={copyDevice}>Link kopieren</Button>
+        {/if}
+      </Card.Root>
+      <p class="mx-2 my-0 text-[13px] leading-snug text-muted-foreground">
+        Öffne den Link oder scanne den Code auf deinem anderen Gerät. Danach haben beide dieselben Routinen, Punkte und denselben Verlauf.
+        Der Link ist dein persönlicher Schlüssel, teil ihn mit niemandem.
+      </p>
     </section>
 
     <section class="flex flex-col gap-2">
@@ -174,21 +216,21 @@
           <span class="flex size-9 items-center justify-center rounded-lg border text-[11px] font-bold tracking-wide">JSON</span>
           <span class="flex flex-1 flex-col gap-0.5"
             ><span class="text-base font-medium">Backup importieren</span><span class="text-[13px] text-muted-foreground"
-              >Ersetzt alle Daten auf diesem Gerät</span
+              >Übernimmt Routinen und Verlauf, ersetzt nichts</span
             ></span
           >
           <input type="file" accept="application/json,.json" class="sr-only" onchange={importJson} />
         </label>
       </Card.Root>
       <p class="mx-2 my-0 text-[13px] leading-snug text-muted-foreground">
-        Routinen, Punkte und Verlauf bleiben auf diesem Gerät. Haushaltsaufgaben liegen auf dem Server. Einzelne Routinen teilst du im
-        Editor per Link oder QR-Code.
+        Routinen, Punkte und Verlauf liegen auf diesem Gerät und, mit Haushaltscode, auf dem Server. Haushaltsaufgaben liegen auf dem
+        Server. Einzelne Routinen teilst du im Editor per Link oder QR-Code.
       </p>
     </section>
 
     <section class="flex flex-col gap-2">
       <h2 class={sectionLabel}>Darstellung</h2>
-      <Segmented opts={Object.entries(THEMES)} get={() => app.theme} set={(v) => (app.theme = v)} label="Darstellung" />
+      <Segmented opts={Object.entries(THEMES)} get={() => app.theme} set={(value) => (app.theme = value)} label="Darstellung" />
     </section>
 
     {#if app.perm !== "unsupported"}
@@ -226,20 +268,20 @@
       <tr class="text-[12px] font-semibold text-[#5f5f5a]">
         <th scope="col" class="border-b border-[#141414] py-2 pr-2 text-left">Aufgabe</th>
         <th scope="col" class="border-b border-[#141414] p-2 text-left">Bereich</th>
-        {#each DAYS as [d]}<th scope="col" class="w-10 border-b border-[#141414] py-2 text-center">{d}</th>{/each}
+        {#each DAYS as [short]}<th scope="col" class="w-10 border-b border-[#141414] py-2 text-center">{short}</th>{/each}
       </tr>
     </thead>
     <tbody>
-      {#each planRows as { t, due } (t.id)}
-        {@const ref = noted.findIndex((r) => r.t === t) + 1}
+      {#each planRows as { task, due } (task.id)}
+        {@const ref = noted.findIndex((planRow) => planRow.task === task) + 1}
         <tr class="break-inside-avoid">
           <td class="h-10.5 border-b border-[#cfcfca] pr-2 font-medium"
-            >{t.title}{#if ref}<sup class="ml-0.5 text-[12px] text-[#5f5f5a]">{ref}</sup>{/if}</td
+            >{task.title}{#if ref}<sup class="ml-0.5 text-[12px] text-[#5f5f5a]">{ref}</sup>{/if}</td
           >
-          <td class="border-b border-[#cfcfca] px-2 text-[#45453f]">{areaOf(t.area).name}</td>
-          {#each due as d}
+          <td class="border-b border-[#cfcfca] px-2 text-[#45453f]">{areaOf(task.area).name}</td>
+          {#each due as isDue}
             <td class="border-b border-[#cfcfca] text-center">
-              {#if d}<span class="inline-block size-4.5 rounded-[3px] border-[1.5px] border-[#141414] align-middle"></span>
+              {#if isDue}<span class="inline-block size-4.5 rounded-[3px] border-[1.5px] border-[#141414] align-middle"></span>
               {:else}<span class="inline-block h-px w-2 bg-[#b5b5af] align-middle"></span>{/if}
             </td>
           {/each}
@@ -251,7 +293,7 @@
     <section class="flex flex-col gap-2">
       <h2 class="m-0 text-[13px] font-semibold tracking-[0.06em] text-[#5f5f5a] uppercase">Notizen</h2>
       <ol class="m-0 flex flex-col gap-1.5 pl-5 text-[13px] leading-normal">
-        {#each noted as { t }}<li>{t.title}: {t.note}</li>{/each}
+        {#each noted as { task }}<li>{task.title}: {task.note}</li>{/each}
       </ol>
     </section>
   {/if}

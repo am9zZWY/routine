@@ -3,11 +3,12 @@
   import { untrack } from "svelte";
   import { goto, beforeNavigate } from "$app/navigation";
   import { page } from "$app/state";
-  import { saveRoutine, canEdit, schedule, hm, uid, shareCode } from "../../../logic.js";
+  import { saveRoutine, canEdit, schedule, hm, uid, shareCode, AREA_COLORS, ICONS } from "../../../logic.js";
   import { thumb } from "../../../photo.js";
   import { loadAi, saveAi, suggest } from "../../../ai.js";
   import qrcode from "qrcode-generator";
-  import { app, pick, ic, sectionLabel, listCard, row, field } from "#lib/app.svelte.js";
+  import { app, pick, ic, sectionLabel, listCard, row, field, deleteRoutine } from "#lib/app.svelte.js";
+  import RoutineIcon from "#lib/components/app/RoutineIcon.svelte";
   import { Button } from "#lib/components/ui/button/index.js";
   import * as Card from "#lib/components/ui/card/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
@@ -19,7 +20,7 @@
   import Back from "#lib/components/app/Back.svelte";
   import { Camera, Check, Clock, Copy, GripVertical, Minus, Plus, Redo2, Settings, Share, Share2, Sparkles, Undo2 } from "@lucide/svelte";
 
-  const s = app.s;
+  const appState = app.state;
   const today = $derived(app.today);
   let draft = $state(null);
   let sheet = $state(null); // step id (step sheet) | "ai" | null
@@ -32,12 +33,12 @@
     untrack(() => {
       if (draft && (draft.id === id || (id === "new" && !draft.id))) return;
       if (id === "new") {
-        const d = app.importDraft;
+        const imported = app.importDraft;
         app.importDraft = null;
-        return edit(d);
+        return edit(imported);
       }
-      const r = s.routines.find((x) => x.id === id);
-      if (r && canEdit(s, r, new Date())) edit(r);
+      const routine = appState.routines.find((other) => other.id === id);
+      if (routine && canEdit(appState, routine, new Date())) edit(routine);
       else goto("/", { replace: true });
     });
   });
@@ -51,19 +52,25 @@
     if (!leaveOk()) cancel();
   });
 
-  function edit(r) {
-    const snap = r ? $state.snapshot(r) : { name: "", time: "07:00", tolerance: 5, steps: [], autoStart: false };
-    lastSnap = keyOf(snap);
-    lastSaved = snap.id ? lastSnap : ""; // existing routine: opening alone must not re-save (that would reset pending + progress)
+  function edit(routine) {
+    const snap = routine
+      ? $state.snapshot(routine)
+      : { name: "", time: "07:00", tolerance: 5, steps: [], autoStart: false, color: AREA_COLORS[1][0], icon: "sun" };
     past = [];
     future = [];
     saveMsg = "";
     draft = {
       ...snap,
       autoStart: !!snap.autoStart,
+      color: snap.color ?? AREA_COLORS[1][0],
+      icon: snap.icon ?? "sun",
       time: snap.pending?.time ?? snap.time,
       tolerance: snap.pending?.tolerance ?? snap.tolerance,
     };
+    // Baseline is the draft (with filled-in defaults), so opening alone never counts as an edit:
+    // re-saving an existing routine would reset its pending time change and progress.
+    lastSnap = keyOf(draft);
+    lastSaved = snap.id ? lastSnap : "";
     sheet = insertAt = null;
     newText = aiGoal = aiErr = "";
     aiList = [];
@@ -76,26 +83,26 @@
   let past = $state([]),
     future = $state([]),
     saveMsg = $state("");
-  const keyOf = (d) => {
-    const { id, ...rest } = $state.snapshot(d);
+  const keyOf = (current) => {
+    const { id, ...rest } = $state.snapshot(current);
     return JSON.stringify(rest);
   };
   const SAVED = "Automatisch gespeichert";
-  function problem(d) {
-    if (!d.name.trim()) return "gib einen Namen ein";
-    if (!d.time) return "leg eine Startzeit fest";
-    if (!(d.tolerance >= 0)) return "das Zeitfenster muss 0 oder mehr sein";
-    if (!d.steps.length) return "füg mindestens einen Schritt hinzu";
-    if (d.steps.some((x) => !x.text.trim())) return "jeder Schritt braucht eine Beschreibung";
-    if (d.steps.every((x) => x.optional)) return "mindestens ein Schritt muss Pflicht sein";
-    if (d.steps.some((x) => x.type === "photo" && !x.ref)) return "Foto-Schritte brauchen ein Referenzfoto";
+  function problem(candidate) {
+    if (!candidate.name.trim()) return "gib einen Namen ein";
+    if (!candidate.time) return "leg eine Startzeit fest";
+    if (!(candidate.tolerance >= 0)) return "das Zeitfenster muss 0 oder mehr sein";
+    if (!candidate.steps.length) return "füg mindestens einen Schritt hinzu";
+    if (candidate.steps.some((step) => !step.text.trim())) return "jeder Schritt braucht eine Beschreibung";
+    if (candidate.steps.every((step) => step.optional)) return "mindestens ein Schritt muss Pflicht sein";
+    if (candidate.steps.some((step) => step.type === "photo" && !step.ref)) return "Foto-Schritte brauchen ein Referenzfoto";
     return "";
   }
   $effect(() => {
     if (!draft) return;
     const json = keyOf(draft);
-    const t = setTimeout(() => commit(json), 400);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => commit(json), 400);
+    return () => clearTimeout(timer);
   });
   function commit(json) {
     if (json !== lastSnap) {
@@ -104,16 +111,16 @@
       future = [];
       lastSnap = json;
     }
-    const d = { ...JSON.parse(json), id: draft.id };
-    const p = problem(d);
-    if (p) return (saveMsg = `Nicht gespeichert: ${p}`);
-    const r = s.routines.find((x) => x.id === d.id);
-    if (r && !canEdit(s, r, new Date()))
+    const candidate = { ...JSON.parse(json), id: draft.id };
+    const reason = problem(candidate);
+    if (reason) return (saveMsg = `Nicht gespeichert: ${reason}`);
+    const routine = appState.routines.find((other) => other.id === candidate.id);
+    if (routine && !canEdit(appState, routine, new Date()))
       return (saveMsg = "Nicht gespeichert: gesperrt, solange das Fenster offen ist oder nach einem Verpassen");
     if (json !== lastSaved) {
-      saveRoutine(s, d, new Date());
-      if (!r) {
-        draft.id = s.routines.at(-1).id;
+      saveRoutine(appState, candidate, new Date());
+      if (!routine) {
+        draft.id = appState.routines.at(-1).id;
         goto(`/routine/${draft.id}`, { replace: true, shallow: true, state: {} });
       }
       lastSaved = json;
@@ -149,12 +156,12 @@
     draft.steps.splice(
       at,
       0,
-      ...list.map((x) => ({ id: uid(), text: x.text, type: "tap", ref: null, optional: !!x.optional, min: x.min ?? 2 })),
+      ...list.map((item) => ({ id: uid(), text: item.text, type: "tap", ref: null, optional: !!item.optional, min: item.min ?? 2 })),
     );
     if (insertAt != null) insertAt = at + list.length;
   }
-  function addStep(ev) {
-    ev.preventDefault();
+  function addStep(event) {
+    event.preventDefault();
     if (!newText.trim()) return;
     insertSteps([{ text: newText.trim() }]);
     newText = "";
@@ -162,33 +169,33 @@
   // Drag to reorder: the grip captures the pointer; crossing a neighbour's midpoint swaps the two steps.
   let drag = $state(null),
     listEl = $state();
-  function grab(e, i) {
-    e.preventDefault();
-    e.currentTarget.setPointerCapture(e.pointerId);
-    drag = { i };
+  function grab(event, index) {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    drag = { index };
   }
-  function swap(i, j) {
+  function swap(from, to) {
     const st = draft.steps;
-    if (j < 0 || j >= st.length) return false;
-    [st[i], st[j]] = [st[j], st[i]];
+    if (to < 0 || to >= st.length) return false;
+    [st[from], st[to]] = [st[to], st[from]];
     return true;
   }
-  function dragMove(e) {
+  function dragMove(event) {
     if (!drag) return;
     const rows = listEl.querySelectorAll(".srow"),
-      i = drag.i;
-    const mid = (k) => {
-      const b = rows[k].getBoundingClientRect();
-      return b.top + b.height / 2;
+      index = drag.index;
+    const mid = (rowIndex) => {
+      const box = rows[rowIndex].getBoundingClientRect();
+      return box.top + box.height / 2;
     };
-    if (i > 0 && e.clientY < mid(i - 1)) swap(i, i - 1) && (drag.i = i - 1);
-    else if (i < rows.length - 1 && e.clientY > mid(i + 1)) swap(i, i + 1) && (drag.i = i + 1);
+    if (index > 0 && event.clientY < mid(index - 1)) swap(index, index - 1) && (drag.index = index - 1);
+    else if (index < rows.length - 1 && event.clientY > mid(index + 1)) swap(index, index + 1) && (drag.index = index + 1);
   }
-  const gripKey = (e, i) => {
-    const d = { ArrowUp: -1, ArrowDown: 1 }[e.key];
-    if (d && swap(i, i + d)) e.preventDefault();
+  const gripKey = (event, index) => {
+    const delta = { ArrowUp: -1, ArrowDown: 1 }[event.key];
+    if (delta && swap(index, index + delta)) event.preventDefault();
   };
-  const sheetStep = $derived(draft ? draft.steps.findIndex((x) => x.id === sheet) : -1);
+  const sheetStep = $derived(draft ? draft.steps.findIndex((step) => step.id === sheet) : -1);
 
   // AI suggestions from an OpenAI-compatible endpoint (see ai.js). aiAdded marks suggestion indexes already inserted.
   let aiGoal = $state(""),
@@ -203,28 +210,28 @@
     aiErr = "";
     if (!aiCfg.apiKey && !aiCfg.baseUrl) aiSettings = true;
   }
-  async function askAi(ev) {
-    ev.preventDefault();
+  async function askAi(event) {
+    event.preventDefault();
     if (aiBusy) return;
     aiBusy = true;
     aiErr = "";
     try {
       aiList = await suggest(aiGoal, $state.snapshot(draft.steps), $state.snapshot(aiCfg));
       aiAdded = {};
-    } catch (e) {
-      aiErr = e.message;
-      if (e.status === 401 || /401/.test(e.message)) aiSettings = true;
+    } catch (error) {
+      aiErr = error.message;
+      if (error.status === 401 || /401/.test(error.message)) aiSettings = true;
     }
     aiBusy = false;
   }
   function takeIdeas(idx) {
-    idx = idx.filter((i) => !aiAdded[i]);
-    for (const i of idx) aiAdded[i] = true;
-    if (idx.length) insertSteps(idx.map((i) => aiList[i]));
+    idx = idx.filter((index) => !aiAdded[index]);
+    for (const index of idx) aiAdded[index] = true;
+    if (idx.length) insertSteps(idx.map((index) => aiList[index]));
   }
   const posHint = $derived(insertAt == null || insertAt >= (draft?.steps.length ?? 0) ? "ans Ende" : `an Position ${insertAt + 1}`);
-  async function setRef(ev, step) {
-    const file = ev.target.files[0];
+  async function setRef(event, step) {
+    const file = event.target.files[0];
     if (file)
       try {
         step.ref = await thumb(file);
@@ -233,11 +240,10 @@
       }
   }
   function remove() {
-    const r = s.routines.find((x) => x.id === draft.id);
-    if (!canEdit(s, r, new Date())) return alert("Gesperrt: Das Fenster ist offen oder wurde heute verpasst.");
-    if (!confirm(`„${r.name}“ löschen? Bisherige Punkte bleiben.`)) return;
-    s.routines = s.routines.filter((x) => x !== r);
-    delete s.progress[r.id];
+    const routine = appState.routines.find((other) => other.id === draft.id);
+    if (!canEdit(appState, routine, new Date())) return alert("Gesperrt: Das Fenster ist offen oder wurde heute verpasst.");
+    if (!confirm(`„${routine.name}“ löschen? Bisherige Punkte bleiben.`)) return;
+    deleteRoutine(routine);
     draft = null;
     goto("/");
   }
@@ -245,12 +251,12 @@
   // Share by link / QR. Imported routines open as an unsaved new draft; photo refs must be re-taken.
   let shareOpen = $state(false),
     shared = $state(null);
-  async function openShare(r) {
-    const url = `${location.origin}/#r=${await shareCode($state.snapshot(r))}`;
-    const q = qrcode(0, "L");
-    q.addData(url);
-    q.make();
-    shared = { name: r.name, url, svg: q.createSvgTag({ cellSize: 4, margin: 16, scalable: true }) };
+  async function openShare(routine) {
+    const url = `${location.origin}/#r=${await shareCode($state.snapshot(routine))}`;
+    const qr = qrcode(0, "L");
+    qr.addData(url);
+    qr.make();
+    shared = { name: routine.name, url, svg: qr.createSvgTag({ cellSize: 4, margin: 16, scalable: true }) };
     shareOpen = true;
   }
   const copyLink = () =>
@@ -306,7 +312,7 @@
           variant="ghost"
           size="icon"
           class="size-11"
-          onclick={() => openShare(s.routines.find((x) => x.id === draft.id))}
+          onclick={() => openShare(appState.routines.find((other) => other.id === draft.id))}
           aria-label="Routine teilen"
           title="Routine teilen"><Share2 {...ic} /></Button
         >{/if}
@@ -326,31 +332,73 @@
       <Input id="name" bind:value={draft.name} placeholder="Morgenroutine" class={field} />
     </div>
 
-    <div class="grid grid-cols-2 gap-3">
-      <div class="flex flex-col gap-2">
-        <Label for="time" class={sectionLabel}>Startzeit</Label>
-        <Input id="time" type="time" bind:value={draft.time} onclick={pick} class="{field} num block" />
-      </div>
-      <div class="flex flex-col gap-2">
-        <span class={sectionLabel}>Zeitfenster</span>
-        <div class="flex h-13 items-center justify-between rounded-xl border bg-card pr-1 pl-4">
-          <span class="num text-[17px] font-medium">±{draft.tolerance}<small class="text-[13px] text-muted-foreground"> Min.</small></span>
-          <span class="flex">
-            <Button
-              variant="ghost"
-              size="icon"
-              class="size-11"
-              onclick={() => (draft.tolerance = Math.max(0, draft.tolerance - 1))}
-              aria-label="Fenster kleiner"><Minus {...ic} /></Button
+    <div class="flex flex-col gap-2">
+      <span class={sectionLabel}>Farbe und Symbol</span>
+      <Card.Root class="{listCard} gap-3 p-3">
+        <div class="flex flex-wrap gap-1" role="group" aria-label="Farbe">
+          {#each AREA_COLORS as [color, name] (color)}
+            <button
+              class="flex size-10 items-center justify-center rounded-full bg-transparent"
+              aria-label={name}
+              aria-pressed={draft.color === color}
+              onclick={() => (draft.color = color)}
             >
-            <Button variant="ghost" size="icon" class="size-11" onclick={() => draft.tolerance++} aria-label="Fenster größer"
-              ><Plus {...ic} /></Button
-            >
-          </span>
+              <span
+                class="flex size-7 items-center justify-center rounded-full text-white"
+                style="background: {color}; {draft.color === color ? `box-shadow: 0 0 0 2px var(--card), 0 0 0 4px ${color}` : ''}"
+                >{#if draft.color === color}<Check size={14} strokeWidth={3} aria-hidden="true" />{/if}</span
+              >
+            </button>
+          {/each}
         </div>
-      </div>
+        <div class="grid grid-cols-6 gap-1" role="group" aria-label="Symbol">
+          {#each ICONS as name (name)}
+            <button
+              class="flex h-11 items-center justify-center rounded-xl {draft.icon === name
+                ? 'text-white'
+                : 'bg-transparent text-muted-foreground'}"
+              style={draft.icon === name ? `background: ${draft.color}` : ""}
+              aria-label="Symbol {name}"
+              aria-pressed={draft.icon === name}
+              onclick={() => (draft.icon = name)}><RoutineIcon icon={name} /></button
+            >
+          {/each}
+        </div>
+      </Card.Root>
     </div>
-    {#if draft.id && s.routines.find((x) => x.id === draft.id)?.pending}
+
+    <!-- One card with two rows: two cards side by side overflowed on narrow phones (iOS time inputs are wide). -->
+    <Card.Root class={listCard}>
+      <label class="{row} justify-between">
+        <span class="text-base font-medium">Startzeit</span>
+        <Input
+          id="time"
+          type="time"
+          bind:value={draft.time}
+          onclick={pick}
+          class="num h-11 w-auto min-w-0 rounded-lg border-0 bg-secondary px-3 text-[17px] font-medium shadow-none dark:bg-secondary"
+        />
+      </label>
+      <div class="{row} justify-between pr-1">
+        <span class="flex flex-col">
+          <span class="text-base font-medium">Zeitfenster</span>
+          <span class="num text-[13px] text-muted-foreground">±{draft.tolerance} Min. um die Startzeit</span>
+        </span>
+        <span class="flex">
+          <Button
+            variant="ghost"
+            size="icon"
+            class="size-11"
+            onclick={() => (draft.tolerance = Math.max(0, draft.tolerance - 1))}
+            aria-label="Fenster kleiner"><Minus {...ic} /></Button
+          >
+          <Button variant="ghost" size="icon" class="size-11" onclick={() => draft.tolerance++} aria-label="Fenster größer"
+            ><Plus {...ic} /></Button
+          >
+        </span>
+      </div>
+    </Card.Root>
+    {#if draft.id && appState.routines.find((other) => other.id === draft.id)?.pending}
       <p class="mx-2 -mt-3 mb-0 text-[13px] text-muted-foreground">Neue Zeit und neues Fenster gelten ab morgen.</p>
     {/if}
 
@@ -387,10 +435,10 @@
       {/snippet}
       <Card.Root class="{listCard} py-1">
         <ol class="m-0 list-none p-0" bind:this={listEl}>
-          {#each draft.steps as step, i (step.id)}
+          {#each draft.steps as step, index (step.id)}
             <li>
-              {@render gap(i, `Neue Schritte vor „${step.text}“ einfügen`)}
-              <div class="srow flex items-center {drag?.i === i ? 'bg-muted' : ''}">
+              {@render gap(index, `Neue Schritte vor „${step.text}“ einfügen`)}
+              <div class="srow flex items-center {drag?.index === index ? 'bg-muted' : ''}">
                 <button
                   class="flex min-h-13 min-w-0 flex-1 items-center gap-3 bg-transparent pl-4 text-left"
                   onclick={() => (sheet = step.id)}
@@ -398,12 +446,14 @@
                   <span
                     class="num flex size-6 shrink-0 items-center justify-center rounded-full text-[12px] font-semibold {step.optional
                       ? 'border border-dashed border-muted-foreground text-muted-foreground'
-                      : 'bg-secondary'}">{i + 1}</span
+                      : 'bg-secondary'}">{index + 1}</span
                   >
                   <span class="flex min-w-0 flex-1 flex-col">
                     <span class="truncate text-base font-medium">{step.text}</span>
                     <span class="num text-[13px] text-muted-foreground"
-                      >{draftSched[i] ? hm(draftSched[i].start) : ""} · {step.min ?? 2} Min.{step.optional ? " · optional" : ""}</span
+                      >{draftSched[index] ? hm(draftSched[index].start) : ""} · {step.min ?? 2} Min.{step.optional
+                        ? " · optional"
+                        : ""}</span
                     >
                   </span>
                   {#if step.type === "photo" && !step.ref}<Badge variant="destructive">Foto fehlt</Badge>
@@ -419,12 +469,12 @@
                   class="flex size-11 shrink-0 touch-none items-center justify-center text-muted-foreground"
                   role="button"
                   tabindex="0"
-                  aria-label="Schritt {i + 1} verschieben (Pfeiltasten)"
-                  onpointerdown={(e) => grab(e, i)}
+                  aria-label="Schritt {index + 1} verschieben (Pfeiltasten)"
+                  onpointerdown={(event) => grab(event, index)}
                   onpointermove={dragMove}
                   onpointerup={() => (drag = null)}
                   onpointercancel={() => (drag = null)}
-                  onkeydown={(e) => gripKey(e, i)}><GripVertical size={18} strokeWidth={1.75} aria-hidden="true" /></span
+                  onkeydown={(event) => gripKey(event, index)}><GripVertical size={18} strokeWidth={1.75} aria-hidden="true" /></span
                 >
               </div>
             </li>
@@ -447,7 +497,7 @@
     {/if}
   </main>
 
-  <Drawer.Root bind:open={() => !!sheet, (v) => !v && (sheet = null)} shouldScaleBackground={false}>
+  <Drawer.Root bind:open={() => !!sheet, (open) => !open && (sheet = null)} shouldScaleBackground={false}>
     <Drawer.Content class="mx-auto max-w-md bg-background">
       <div class="flex max-h-[75vh] flex-col gap-5 overflow-y-auto px-4 pt-3 pb-[max(env(safe-area-inset-bottom),16px)]">
         {#if sheetStep >= 0}
@@ -460,14 +510,14 @@
           <fieldset class="m-0 flex flex-col gap-2 border-0 p-0">
             <legend class="{sectionLabel} mb-2 p-0">Dauer</legend>
             <div class="flex flex-wrap gap-2">
-              {#each [1, 2, 5, 10, 15] as m}
-                {@const on = (step.min ?? 2) === m}
+              {#each [1, 2, 5, 10, 15] as minutes}
+                {@const on = (step.min ?? 2) === minutes}
                 <button
                   aria-pressed={on}
-                  onclick={() => (step.min = m)}
+                  onclick={() => (step.min = minutes)}
                   class="min-h-11 rounded-full border px-4 text-[15px] font-medium {on
                     ? 'border-primary bg-primary text-primary-foreground'
-                    : 'bg-card'}">{m} Min.</button
+                    : 'bg-card'}">{minutes} Min.</button
                 >
               {/each}
             </div>
@@ -491,11 +541,11 @@
           <fieldset class="m-0 flex flex-col gap-3 border-0 p-0">
             <legend class="{sectionLabel} mb-2 p-0">Wie hakst du ab?</legend>
             <div class="grid grid-cols-2 gap-0.5 rounded-xl bg-muted p-0.5">
-              {#each [["tap", "Antippen", Check], ["photo", "Foto", Camera]] as [t, name, Icon]}
-                {@const on = (step.type ?? "tap") === t}
+              {#each [["tap", "Antippen", Check], ["photo", "Foto", Camera]] as [type, name, Icon]}
+                {@const on = (step.type ?? "tap") === type}
                 <button
                   aria-pressed={on}
-                  onclick={() => (step.type = t)}
+                  onclick={() => (step.type = type)}
                   class="flex min-h-11 items-center justify-center gap-2 rounded-[10px] text-sm {on
                     ? 'bg-card font-semibold shadow-sm'
                     : 'bg-transparent font-medium'}"><Icon size={16} strokeWidth={2} aria-hidden="true" />{name}</button
@@ -514,7 +564,7 @@
                     >{step.ref ? "Tippen für ein neues Foto" : "Damit wird später jedes Foto verglichen"}</span
                   >
                 </span>
-                <input type="file" accept="image/*" capture="environment" class="sr-only" onchange={(e) => setRef(e, step)} />
+                <input type="file" accept="image/*" capture="environment" class="sr-only" onchange={(event) => setRef(event, step)} />
               </label>
             {/if}
           </fieldset>
@@ -555,13 +605,13 @@
           </div>
           {#if aiSettings}
             <div class="flex flex-col gap-3 rounded-xl border bg-card p-4">
-              {#each [["baseUrl", "API-URL", "https://api.openai.com/v1", "text"], ["apiKey", "API-Schlüssel", "", "password"], ["model", "Modell", "gpt-4o-mini", "text"]] as [k, name, ph, type]}
+              {#each [["baseUrl", "API-URL", "https://api.openai.com/v1", "text"], ["apiKey", "API-Schlüssel", "", "password"], ["model", "Modell", "gpt-4o-mini", "text"]] as [key, name, ph, type]}
                 <div class="flex flex-col gap-1.5">
-                  <Label for="ai-{k}" class="text-[13px] font-semibold text-muted-foreground">{name}</Label>
+                  <Label for="ai-{key}" class="text-[13px] font-semibold text-muted-foreground">{name}</Label>
                   <Input
-                    id="ai-{k}"
+                    id="ai-{key}"
                     {type}
-                    bind:value={aiCfg[k]}
+                    bind:value={aiCfg[key]}
                     onchange={() => saveAi($state.snapshot(aiCfg))}
                     placeholder={ph}
                     autocomplete="off"
@@ -591,20 +641,20 @@
             <span class={sectionLabel}>{aiList.length ? `Vorschläge, landen ${posHint}` : "Noch keine Vorschläge"}</span>
             {#if aiList.length}
               <Card.Root class={listCard}>
-                {#each aiList as x, i}
-                  {@const got = aiAdded[i]}
+                {#each aiList as idea, index}
+                  {@const got = aiAdded[index]}
                   <div class="{row} pr-2">
                     <span class="flex flex-1 flex-col {got ? 'opacity-50' : ''}">
-                      <span class="text-base font-medium">{x.text}</span>
-                      <span class="text-[13px] text-muted-foreground">{x.min ?? 2} Min.{x.optional ? " · optional" : ""}</span>
+                      <span class="text-base font-medium">{idea.text}</span>
+                      <span class="text-[13px] text-muted-foreground">{idea.min ?? 2} Min.{idea.optional ? " · optional" : ""}</span>
                     </span>
                     <Button
                       variant={got ? "ghost" : "secondary"}
                       size={got ? "default" : "icon"}
                       class={got ? "h-11" : "size-11 rounded-full"}
                       disabled={got}
-                      aria-label={got ? `${x.text} übernommen` : `${x.text} übernehmen`}
-                      onclick={() => takeIdeas([i])}
+                      aria-label={got ? `${idea.text} übernommen` : `${idea.text} übernehmen`}
+                      onclick={() => takeIdeas([index])}
                       >{#if got}Drin{:else}<Plus {...ic} />{/if}</Button
                     >
                   </div>
@@ -616,8 +666,8 @@
             <Button
               variant="secondary"
               class="h-12 flex-1 rounded-xl text-base"
-              disabled={!aiList.some((_, i) => !aiAdded[i])}
-              onclick={() => takeIdeas(aiList.map((_, i) => i))}>Alle übernehmen</Button
+              disabled={!aiList.some((_idea, index) => !aiAdded[index])}
+              onclick={() => takeIdeas(aiList.map((_idea, index) => index))}>Alle übernehmen</Button
             >
             <Button class="h-12 flex-1 rounded-xl text-base" onclick={() => (sheet = null)}>Fertig</Button>
           </div>
@@ -627,7 +677,7 @@
   </Drawer.Root>
 {/if}
 
-<Dialog.Root bind:open={shareOpen} onOpenChange={(o) => !o && (shared = null)}>
+<Dialog.Root bind:open={shareOpen} onOpenChange={(open) => !open && (shared = null)}>
   <Dialog.Content class="max-w-sm gap-4 rounded-2xl bg-background">
     {#if shared}
       <Dialog.Header>

@@ -6,20 +6,30 @@
   import { Badge } from "#lib/components/ui/badge/index.js";
   import SettingsBtn from "#lib/components/app/SettingsBtn.svelte";
 
-  const s = app.s;
-  const total = $derived(score(s));
-  const pointsOn = (day) => s.log.reduce((a, e) => a + (e.day === day ? e.points : 0), 0);
-  const totalUpTo = (day) => score(s, day);
-  const days14 = $derived(Array.from({ length: 14 }, (_, i) => dayKey(addDays(app.now, i - 13))));
+  const appState = app.state;
+  const total = $derived(score(appState));
+  const pointsOn = (day) => appState.log.reduce((sum, logEntry) => sum + (logEntry.day === day ? logEntry.points : 0), 0);
+  const totalUpTo = (day) => score(appState, day);
+  const days14 = $derived(Array.from({ length: 14 }, (_unused, index) => dayKey(addDays(app.now, index - 13))));
   const bars = $derived(days14.map(pointsOn));
   // Positive bars above the baseline, negative below; 44 units of height shared by both.
   const up = $derived(Math.max(1, ...bars)),
-    dn = $derived(Math.max(0, ...bars.map((v) => -v)));
+    dn = $derived(Math.max(0, ...bars.map((value) => -value)));
   const base = $derived(4 + (44 * up) / (up + dn));
-  const week = $derived(bars.slice(7).reduce((a, v) => a + v, 0));
+  const week = $derived(bars.slice(7).reduce((sum, value) => sum + value, 0));
   const days7 = $derived(days14.slice(7).reverse());
-  const names = $derived(Object.fromEntries([...s.log.map((e) => [e.routineId, e.name]), ...s.routines.map((r) => [r.id, r.name])]));
-  const idsOn = (day) => [...new Set([...s.routines.map((r) => r.id), ...s.log.filter((e) => e.day === day).map((e) => e.routineId)])];
+  const names = $derived(
+    Object.fromEntries([
+      ...appState.log.map((logEntry) => [logEntry.routineId, logEntry.name]),
+      ...appState.routines.map((routine) => [routine.id, routine.name]),
+    ]),
+  );
+  const idsOn = (day) => [
+    ...new Set([
+      ...appState.routines.map((routine) => routine.id),
+      ...appState.log.filter((logEntry) => logEntry.day === day).map((logEntry) => logEntry.routineId),
+    ]),
+  ];
   const label = (day) => new Date(day + "T12:00").toLocaleDateString("de-DE", { weekday: "short", day: "numeric", month: "short" });
   const wd = (day) => new Date(day + "T12:00").toLocaleDateString("de-DE", { weekday: "narrow" });
 </script>
@@ -39,23 +49,23 @@
       >
     </div>
     <svg viewBox="0 0 140 64" class="w-full" aria-hidden="true">
-      {#each bars as v, i}
-        {@const h = Math.max((Math.abs(v) / (up + dn)) * 44, 6)}
-        {#if v || i === 13}
+      {#each bars as value, index}
+        {@const barHeight = Math.max((Math.abs(value) / (up + dn)) * 44, 6)}
+        {#if value || index === 13}
           <rect
-            x={i * 10 + 1.5}
-            y={v >= 0 ? base - h : base}
+            x={index * 10 + 1.5}
+            y={value >= 0 ? base - barHeight : base}
             width="7"
-            height={h}
+            height={barHeight}
             rx="2"
-            class={i === 13 && v === 0 ? "fill-border" : v < 0 ? "fill-destructive" : "fill-brand"}
+            class={index === 13 && value === 0 ? "fill-border" : value < 0 ? "fill-destructive" : "fill-brand"}
           />
         {/if}
         <text
-          x={i * 10 + 5}
+          x={index * 10 + 5}
           y="62"
           text-anchor="middle"
-          class="text-[6px] {i === 13 ? 'fill-foreground font-bold' : 'fill-muted-foreground'}">{wd(days14[i])}</text
+          class="text-[6px] {index === 13 ? 'fill-foreground font-bold' : 'fill-muted-foreground'}">{wd(days14[index])}</text
         >
       {/each}
       <line x1="0" x2="140" y1={base} y2={base} class="stroke-border" stroke-width="0.5" />
@@ -70,14 +80,16 @@
       </h2>
       <Card.Root class={listCard}>
         {#each idsOn(day) as id}
-          {@const e = entry(s, id, day)}
+          {@const logEntry = entry(appState, id, day)}
           <div class="{row} min-h-12 justify-between text-[15px]">
             <span class="font-medium">{names[id]}</span>
-            {#if e}
+            {#if logEntry}
               <span class="num flex items-center gap-2 text-[13px] text-muted-foreground">
-                <Badge variant={e.status === "done" ? "secondary" : "destructive"}>{ST[e.status] ?? e.status}</Badge>
-                {fmtOffset(e.offset)}
-                <b class="font-semibold {e.points < 0 ? 'text-destructive' : 'text-foreground'}">{signed(e.points)}</b>
+                <Badge variant={["done", "late"].includes(logEntry.status) ? "secondary" : "destructive"}
+                  >{ST[logEntry.status] ?? logEntry.status}</Badge
+                >
+                {fmtOffset(logEntry.offset)}
+                <b class="font-semibold {logEntry.points < 0 ? 'text-destructive' : 'text-foreground'}">{signed(logEntry.points)}</b>
               </span>
             {:else}<span class="text-muted-foreground">—</span>{/if}
           </div>

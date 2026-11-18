@@ -1,7 +1,8 @@
-// State and helpers shared by every page. Personal data lives in `app.s` (localStorage, saved by the layout);
+// State and helpers shared by every page. Personal data lives in `app.state` (localStorage, saved by the layout);
 // household changes go through `mutate`, which queues an op and syncs with the server (see household.js).
 import { load, status, windowOf, stepOf, cfg, dayKey, choreKey, GENERAL } from "../logic.js";
 import { applyOp } from "../household.js";
+import { merge, personal } from "../personal.js";
 
 const read = (key, fallback) => {
   try {
@@ -17,12 +18,16 @@ try {
 } catch {}
 
 class App {
-  s = $state(load());
+  state = $state(load());
   now = $state(new Date());
   today = $derived(dayKey(this.now));
   banner = $state("");
   hh = $state(read("routines-household", { code: "", name: "" })); // own key: the code stays out of the JSON backup
   syncState = $state(""); // ok | offline | denied | nocode | error
+  // Personal sync key (32 hex chars), made on the first device; Gerät verbinden carries it to the others. Own key, not in the backup.
+  meKey = $state(read("routines-me", { key: "" }).key);
+  meState = $state(""); // same values as syncState
+  day = $state(null); // day picked in the Heute strip (null = today)
   perm = $state(typeof Notification === "undefined" ? "unsupported" : Notification.permission);
   theme = $state(theme);
   newOpen = $state(false); // the "+" sheet
@@ -32,30 +37,34 @@ class App {
   importDraft = null; // routine from a share link, picked up by /routine/new
   footer = $state(null); // snippet a page shows above the tab bar (the routine editor's add-step bar)
 
-  sorted = $derived([...this.s.routines].sort((a, b) => cfg(a, this.today).time.localeCompare(cfg(b, this.today).time)));
+  sorted = $derived(
+    [...this.state.routines].sort((first, second) => cfg(first, this.today).time.localeCompare(cfg(second, this.today).time)),
+  );
 }
 export const app = new App();
 
-export const stOf = (r) => status(app.s, r, app.now);
+export const stOf = (routine) => status(app.state, routine, app.now);
 
-// --- Household sync. Every change is an op: applied here at once, queued in s.outbox (persisted, so it
+// --- Household sync. Every change is an op: applied here at once, queued in state.outbox (persisted, so it
 // survives being away from home), sent on the next sync. ---
 export function mutate(op) {
-  applyOp(app.s, op);
-  app.s.outbox.push(op);
+  applyOp(app.state, op);
+  app.state.outbox.push(op);
   sync();
 }
 let syncing = false,
   again = false;
 export async function sync() {
-  const s = app.s;
+  const state = app.state;
   if (!app.hh.code) return (app.syncState = "nocode");
   if (syncing) return (again = true);
   syncing = true;
-  const sent = $state.snapshot(s.outbox);
+  const sent = $state.snapshot(state.outbox);
   // A device that never synced uploads its old local tasks once; the server ignores it if it already has tasks.
   const ops =
-    !s.synced && s.tasks.length ? [{ t: "seed", tasks: $state.snapshot(s.tasks), areas: $state.snapshot(s.areas) }, ...sent] : sent;
+    !state.synced && state.tasks.length
+      ? [{ t: "seed", tasks: $state.snapshot(state.tasks), areas: $state.snapshot(state.areas) }, ...sent]
+      : sent;
   try {
     const res = await fetch("/api/household", {
       method: ops.length ? "POST" : "GET",
@@ -64,14 +73,14 @@ export async function sync() {
     });
     if (res.status === 401) app.syncState = "denied";
     else if (res.status === 400) {
-      s.outbox = s.outbox.slice(sent.length); // a malformed op would block the queue forever
+      state.outbox = state.outbox.slice(sent.length); // a malformed op would block the queue forever
       app.syncState = "error";
     } else if (!res.ok) throw new Error();
     else {
-      const h = await res.json();
-      s.outbox = s.outbox.slice(sent.length);
-      for (const op of s.outbox) applyOp(h, $state.snapshot(op)); // changes made while the request was in flight
-      Object.assign(s, { tasks: h.tasks, areas: h.areas, chores: h.chores, synced: true });
+      const household = await res.json();
+      state.outbox = state.outbox.slice(sent.length);
+      for (const op of state.outbox) applyOp(household, $state.snapshot(op)); // changes made while the request was in flight
+      Object.assign(state, { tasks: household.tasks, areas: household.areas, chores: household.chores, synced: true });
       app.syncState = "ok";
     }
   } catch {
@@ -82,11 +91,61 @@ export async function sync() {
   }
 }
 
+// --- Personal sync: send the whole personal state when it changed, merge the answer into the current state
+// (not over it, so edits made while the request was in flight survive). See personal.js. ---
+let meBusy = false,
+  meAgain = false,
+  lastSent = "";
+export const newKey = () => [...crypto.getRandomValues(new Uint8Array(16))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+export function setMeKey(key) {
+  app.meKey = key;
+  lastSent = ""; // a new key means a new server copy: upload everything once
+  try {
+    localStorage.setItem("routines-me", JSON.stringify({ key }));
+  } catch {}
+}
+export async function syncMe() {
+  const state = app.state;
+  if (!app.hh.code) return (app.meState = "nocode");
+  if (!app.meKey) setMeKey(newKey());
+  if (meBusy) return (meAgain = true);
+  meBusy = true;
+  const mine = JSON.stringify(personal($state.snapshot(state)));
+  try {
+    const res = await fetch("/api/me", {
+      method: mine === lastSent ? "GET" : "POST",
+      headers: { "x-household-code": app.hh.code, "x-sync-key": app.meKey, "content-type": "application/json" },
+      body: mine === lastSent ? undefined : mine,
+    });
+    if (res.status === 401) app.meState = "denied";
+    else if (res.status === 400) app.meState = "error";
+    else if (!res.ok) throw new Error();
+    else {
+      const merged = merge(personal($state.snapshot(state)), await res.json());
+      const next = JSON.stringify(merged);
+      if (next !== JSON.stringify(personal($state.snapshot(state)))) Object.assign(state, merged);
+      lastSent = next; // now equal to the server copy
+      app.meState = "ok";
+    }
+  } catch {
+    app.meState = "offline";
+  } finally {
+    meBusy = false;
+    if (meAgain) ((meAgain = false), syncMe());
+  }
+}
+// Deleting keeps a tombstone so the routine is not brought back by another device. Its log (points) stays.
+export function deleteRoutine(routine) {
+  app.state.routines = app.state.routines.filter((other) => other.id !== routine.id);
+  app.state.gone[routine.id] = new Date().toISOString();
+  delete app.state.progress[routine.id];
+}
+
 // --- Household helpers ---
 export const areaOf = (name) =>
-  app.s.areas.find((a) => a.name === name) ?? app.s.areas.find((a) => a.name === GENERAL) ?? { name, color: "#7A7A75" };
+  app.state.areas.find((area) => area.name === name) ?? app.state.areas.find((area) => area.name === GENERAL) ?? { name, color: "#7A7A75" };
 // Pale tint that works in both themes (custom areas only store one colour).
-export const pale = (c) => `color-mix(in srgb, ${c} 16%, var(--card))`;
+export const pale = (color) => `color-mix(in srgb, ${color} 16%, var(--card))`;
 export const DAYS = [
   ["Mo", "Montag"],
   ["Di", "Dienstag"],
@@ -97,52 +156,64 @@ export const DAYS = [
   ["So", "Sonntag"],
 ];
 export const DAY_ADV = ["montags", "dienstags", "mittwochs", "donnerstags", "freitags", "samstags", "sonntags"];
-export function rhythm(t) {
-  const d0 = t.days?.[0] ?? 5;
-  if (t.mode === "day") return "Täglich";
-  if (t.mode === "interval") return `Alle ${t.every} Wo., ${DAY_ADV[d0]}`;
-  if (t.mode === "month") return `1. ${DAYS[d0][0]} im Monat`;
-  const ds = [...(t.days ?? [])].sort();
-  return ds.length === 7 ? "Täglich" : ds.length === 1 ? `Jeden ${DAYS[ds[0]][0]}` : ds.map((i) => DAYS[i][0]).join(", ");
+export function rhythm(task) {
+  const d0 = task.days?.[0] ?? 5;
+  if (task.mode === "day") return "Täglich";
+  if (task.mode === "interval") return `Alle ${task.every} Wo., ${DAY_ADV[d0]}`;
+  if (task.mode === "month") return `1. ${DAYS[d0][0]} im Monat`;
+  const ds = [...(task.days ?? [])].sort();
+  return ds.length === 7 ? "Täglich" : ds.length === 1 ? `Jeden ${DAYS[ds[0]][0]}` : ds.map((weekday) => DAYS[weekday][0]).join(", ");
 }
-export const isDone = (t, day = app.today) => !!app.s.chores[choreKey(t.id, day)];
+export const isDone = (task, day = app.today) => !!app.state.chores[choreKey(task.id, day)];
 
 // --- Formatting ---
-const pad = (n) => String(n).padStart(2, "0");
+const pad = (number) => String(number).padStart(2, "0");
 export const mmss = (ms) => {
-  const t = Math.max(0, Math.floor(ms / 1000));
-  return `${Math.floor(t / 60)}:${pad(t % 60)}`;
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(seconds / 60)}:${pad(seconds % 60)}`;
 };
-export const until = (d) => {
-  const m = Math.ceil((d - app.now) / 60000);
-  return m < 60 ? `in ${m} Min.` : `in ${Math.round(m / 60)} Std.`;
+export const until = (date) => {
+  const minutes = Math.ceil((date - app.now) / 60000);
+  return minutes < 60 ? `in ${minutes} Min.` : `in ${Math.round(minutes / 60)} Std.`;
 };
-export const fmtOffset = (o) => (o == null ? "" : `${o >= 0 ? "+" : ""}${o} Min.`);
-export const signed = (n) => (n > 0 ? `+${n}` : `${n}`);
+export const fmtOffset = (offset) => (offset == null ? "" : `${offset >= 0 ? "+" : ""}${offset} Min.`);
+export const signed = (number) => (number > 0 ? `+${number}` : `${number}`);
 export const summary = (steps) => {
-  const o = steps.filter((x) => x.optional).length;
-  return `${steps.length} Schritt${steps.length === 1 ? "" : "e"}${o ? `, ${o} optional` : ""}`;
+  const optional = steps.filter((step) => step.optional).length;
+  return `${steps.length} Schritt${steps.length === 1 ? "" : "e"}${optional ? `, ${optional} optional` : ""}`;
 };
-export const ST = { upcoming: "geplant", open: "offen", done: "erledigt", missed: "verpasst", partial: "teilweise" };
-export function meta(r) {
-  const st = stOf(r),
-    w = windowOf(r, app.today);
+export const ST = {
+  new: "ab morgen",
+  upcoming: "geplant",
+  open: "offen",
+  overdue: "überfällig",
+  done: "erledigt",
+  late: "zu spät erledigt",
+  missed: "verpasst",
+  partial: "teilweise",
+};
+export function meta(routine) {
+  const st = stOf(routine),
+    win = windowOf(routine, app.today);
   if (st === "open")
-    return `Jetzt offen · noch ${mmss(w.close - app.now)} Min.${stepOf(app.s, r, app.now) ? ` · Schritt ${stepOf(app.s, r, app.now) + 1}` : ""}`;
-  return `${cfg(r, app.today).time} · ${summary(r.steps)} · ${until(w.open)}`;
+    return `Jetzt offen · noch ${mmss(win.close - app.now)} Min.${stepOf(app.state, routine, app.now) ? ` · Schritt ${stepOf(app.state, routine, app.now) + 1}` : ""}`;
+  if (st === "overdue") return `Überfällig · heute noch abhaken, ohne Punkte`;
+  if (st === "new") return `${cfg(routine, app.today).time} · startet morgen`;
+  if (st !== "upcoming") return `${cfg(routine, app.today).time} · ${ST[st]}`;
+  return `${cfg(routine, app.today).time} · ${summary(routine.steps)} · ${until(win.open)}`;
 }
 // Chrome desktop only opens the time picker from its tiny icon; open it on any click. iOS opens it natively.
-export const pick = (e) => {
+export const pick = (event) => {
   try {
-    e.currentTarget.showPicker();
+    event.currentTarget.showPicker();
   } catch {}
 };
 export function download(blob, name) {
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 }
 
 // Shared Lucide icon props (design: thin strokes) and class strings, so the markup stays close to the design.

@@ -2,7 +2,7 @@
   // Running a routine: countdown ring, current step (tap or photo check), the steps after it.
   import { goto } from "$app/navigation";
   import { page } from "$app/state";
-  import { windowOf, advance, stepOf, schedule, hm, onlyOptionalLeft } from "../../../logic.js";
+  import { windowOf, advance, stepOf, schedule, hm, onlyOptionalLeft, tickable } from "../../../logic.js";
   import { compare, THRESHOLD } from "../../../photo.js";
   import { app, stOf, mmss, fmtOffset, signed, ic, sectionLabel, listCard, row } from "#lib/app.svelte.js";
   import { Button } from "#lib/components/ui/button/index.js";
@@ -10,10 +10,10 @@
   import Back from "#lib/components/app/Back.svelte";
   import { Camera, Check, Flag } from "@lucide/svelte";
 
-  const s = app.s;
+  const appState = app.state;
   const now = $derived(app.now);
   const today = $derived(app.today);
-  const run = $derived(s.routines.find((r) => r.id === page.params.id));
+  const run = $derived(appState.routines.find((routine) => routine.id === page.params.id));
   $effect(() => {
     if (!run) goto("/", { replace: true });
   });
@@ -22,16 +22,19 @@
 
   function done(finish = false) {
     app.now = new Date();
-    const e = advance(s, run, app.now, finish);
-    if (e) {
+    const logEntry = advance(appState, run, app.now, finish);
+    if (logEntry) {
       const photo = photoScore != null ? ` · Foto ${photoScore.toFixed(2)}` : "";
-      app.banner = `${e.name} erledigt ${fmtOffset(e.offset)} · ${signed(e.points)}${photo}`;
+      app.banner =
+        logEntry.status === "late"
+          ? `${logEntry.name} nachträglich erledigt · keine Punkte, keine Strafe`
+          : `${logEntry.name} erledigt ${fmtOffset(logEntry.offset)} · ${signed(logEntry.points)}${photo}`;
       goto("/");
     }
   }
-  async function checkPhoto(ev, step) {
-    const file = ev.target.files[0];
-    ev.target.value = "";
+  async function checkPhoto(event, step) {
+    const file = event.target.files[0];
+    event.target.value = "";
     if (!file) return;
     busy = true;
     photoScore = null;
@@ -47,11 +50,11 @@
 
 {#if run}
   {@const st = stOf(run)}
-  {@const w = windowOf(run, today)}
-  {@const i = stepOf(s, run, now)}
-  {@const step = run.steps[i]}
+  {@const win = windowOf(run, today)}
+  {@const current = stepOf(appState, run, now)}
+  {@const step = run.steps[current]}
   {@const sc = schedule(run, today)}
-  {@const frac = Math.min(1, Math.max(0, (w.close - now) / (w.close - w.open || 1)))}
+  {@const frac = Math.min(1, Math.max(0, (win.close - now) / (win.close - win.open || 1)))}
   <Back title={run.name} />
 
   <main class="flex flex-1 flex-col gap-5 px-4 pb-8">
@@ -71,39 +74,44 @@
         />
       </svg>
       <div class="flex flex-col items-center">
-        <b class="num text-[44px] leading-none font-bold tracking-tight">{mmss(w.close - now)}</b>
-        <span class="mt-1 text-[13px] text-muted-foreground">übrig, endet {hm(w.close)}</span>
+        {#if st === "overdue"}
+          <b class="text-[34px] leading-none font-bold tracking-tight text-destructive">Zu spät</b>
+          <span class="mt-1 text-[13px] text-muted-foreground">heute noch abhaken, 0 Pkt.</span>
+        {:else}
+          <b class="num text-[44px] leading-none font-bold tracking-tight">{mmss(win.close - now)}</b>
+          <span class="mt-1 text-[13px] text-muted-foreground">übrig, endet {hm(win.close)}</span>
+        {/if}
       </div>
     </div>
 
     <ol class="m-0 flex list-none justify-center gap-1.5 p-0" aria-label="Fortschritt">
-      {#each run.steps as x, j (x.id)}
+      {#each run.steps as item, index (item.id)}
         <li
-          aria-label={x.text}
-          class="h-1.5 rounded-full {j === i
+          aria-label={item.text}
+          class="h-1.5 rounded-full {index === current
             ? 'w-6 bg-brand'
-            : j < i
+            : index < current
               ? 'w-1.5 bg-brand'
-              : x.optional
+              : item.optional
                 ? 'w-1.5 border border-dashed border-muted-foreground'
                 : 'w-1.5 bg-border'}"
         ></li>
       {/each}
     </ol>
 
-    {#if st !== "open" || !step}
+    {#if !tickable(st) || !step}
       <Card.Root class="{listCard} p-6"><h2 class="m-0 text-xl font-semibold">Das Fenster ist zu.</h2></Card.Root>
     {:else}
       <Card.Root class="{listCard} gap-4 p-5">
         <div class="flex justify-between text-[13px] text-muted-foreground">
-          <span>Schritt {i + 1} von {run.steps.length}</span>
+          <span>Schritt {current + 1} von {run.steps.length}</span>
           <span>{step.type === "photo" ? "braucht ein Foto" : step.optional ? "optional" : "antippen"}</span>
         </div>
         <h2 class="m-0 text-2xl leading-tight font-bold tracking-tight">{step.text}</h2>
-        {#if sc[i].end >= now}<p class="num m-0 text-[15px] text-muted-foreground">
-            <b class="text-foreground">{mmss(sc[i].end - now)}</b> bis {hm(sc[i].end)}
+        {#if sc[current].end >= now}<p class="num m-0 text-[15px] text-muted-foreground">
+            <b class="text-foreground">{mmss(sc[current].end - now)}</b> bis {hm(sc[current].end)}
           </p>
-        {:else}<p class="num m-0 text-[15px] font-medium text-destructive">+{mmss(now - sc[i].end)} zu spät</p>{/if}
+        {:else}<p class="num m-0 text-[15px] font-medium text-destructive">+{mmss(now - sc[current].end)} zu spät</p>{/if}
         {#if step.type === "tap"}
           <Button
             class="h-13 w-full rounded-xl bg-brand text-base text-brand-foreground hover:bg-brand/90"
@@ -128,7 +136,7 @@
                 capture="environment"
                 class="sr-only"
                 disabled={busy}
-                onchange={(e) => checkPhoto(e, step)}
+                onchange={(event) => checkPhoto(event, step)}
               />
             </label>
           </div>
@@ -138,7 +146,7 @@
             </p>
           {/if}
         {/if}
-        {#if step.optional || onlyOptionalLeft(run, i)}
+        {#if step.optional || onlyOptionalLeft(run, current)}
           <div class="flex gap-2">
             {#if step.optional}<Button
                 variant="secondary"
@@ -148,26 +156,47 @@
                   done();
                 }}>Überspringen</Button
               >{/if}
-            {#if onlyOptionalLeft(run, i)}<Button variant="secondary" class="h-11 flex-1 rounded-xl" onclick={() => done(true)}
+            {#if onlyOptionalLeft(run, current)}<Button variant="secondary" class="h-11 flex-1 rounded-xl" onclick={() => done(true)}
                 ><Flag {...ic} /> Abschließen</Button
               >{/if}
           </div>
         {/if}
       </Card.Root>
-      {#if run.steps.length > i + 1}
-        <section class="flex flex-col gap-2">
-          <h2 class={sectionLabel}>Danach</h2>
-          <Card.Root class={listCard}>
-            {#each run.steps.slice(i + 1) as x, k (x.id)}
-              <div class="{row} min-h-12 text-[15px]">
-                <span class="num w-11 text-[13px] text-muted-foreground">{hm(sc[i + 1 + k].start)}</span>
-                <span class="flex-1 font-medium {x.optional ? 'text-muted-foreground' : ''}">{x.text}</span>
-                <span class="text-[13px] text-muted-foreground">{x.type === "photo" ? "Foto" : x.optional ? "optional" : ""}</span>
-              </div>
-            {/each}
-          </Card.Root>
-        </section>
-      {/if}
+      <section class="flex flex-col gap-2">
+        <h2 class={sectionLabel}>Alle Schritte</h2>
+        <Card.Root class={listCard}>
+          {#each run.steps as item, index (item.id)}
+            <div
+              class="{row} min-h-12 text-[15px] {index === current ? 'bg-brand/8' : ''}"
+              aria-current={index === current ? "step" : undefined}
+            >
+              {#if index < current}
+                <span
+                  class="flex size-6 shrink-0 items-center justify-center rounded-full bg-brand text-brand-foreground"
+                  aria-label="erledigt"><Check size={14} strokeWidth={3} aria-hidden="true" /></span
+                >
+              {:else}
+                <span
+                  class="size-6 shrink-0 rounded-full border-2 {item.optional ? 'border-dashed' : ''} {index === current
+                    ? 'border-brand'
+                    : 'border-muted-foreground/50'}"
+                  aria-label={index === current ? "jetzt" : "offen"}
+                ></span>
+              {/if}
+              <span
+                class="flex-1 font-medium {index < current
+                  ? 'text-muted-foreground line-through'
+                  : item.optional
+                    ? 'text-muted-foreground'
+                    : ''}">{item.text}</span
+              >
+              <span class="num text-[13px] text-muted-foreground"
+                >{item.type === "photo" ? "Foto · " : item.optional ? "optional · " : ""}{hm(sc[index].start)}</span
+              >
+            </div>
+          {/each}
+        </Card.Root>
+      </section>
     {/if}
   </main>
 {/if}

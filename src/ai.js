@@ -29,7 +29,7 @@ const SYSTEM =
 export async function suggest(goal, steps, cfg, fetchFn = fetch) {
   const headers = { "Content-Type": "application/json" };
   if (cfg.apiKey) headers.Authorization = `Bearer ${cfg.apiKey}`;
-  const existing = steps.map((x) => x.text).filter(Boolean);
+  const existing = steps.map((step) => step.text).filter(Boolean);
   const user = `Ziel: ${goal}\nVorhandene Schritte: ${existing.length ? existing.join("; ") : "keine"}`;
   let res;
   try {
@@ -56,12 +56,12 @@ export async function suggest(goal, steps, cfg, fetchFn = fetch) {
     items = JSON.parse(content.slice(content.indexOf("["), content.lastIndexOf("]") + 1));
   } catch {}
   const out = (Array.isArray(items) ? items : [])
-    .flatMap((x) => {
-      const text = typeof x?.text === "string" ? x.text.trim() : "";
-      const optional = x?.optional ?? false;
-      const n = Math.round(Number(x?.min ?? 2));
-      if (!text || text.length > 120 || typeof optional !== "boolean" || !Number.isFinite(n)) return [];
-      return [{ text, min: Math.min(240, Math.max(1, n)), optional }];
+    .flatMap((item) => {
+      const text = typeof item?.text === "string" ? item.text.trim() : "";
+      const optional = item?.optional ?? false;
+      const minutes = Math.round(Number(item?.min ?? 2));
+      if (!text || text.length > 120 || typeof optional !== "boolean" || !Number.isFinite(minutes)) return [];
+      return [{ text, min: Math.min(240, Math.max(1, minutes)), optional }];
     })
     .slice(0, 8);
   if (!out.length) throw new Error("KI hat keine brauchbaren Schritte geliefert");

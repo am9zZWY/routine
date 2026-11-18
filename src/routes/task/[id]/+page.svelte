@@ -11,7 +11,7 @@
   import Segmented from "#lib/components/app/Segmented.svelte";
   import { Minus, Plus } from "@lucide/svelte";
 
-  const s = app.s;
+  const appState = app.state;
   const today = $derived(app.today);
   const tdraft = $derived(app.tdraft);
 
@@ -19,12 +19,12 @@
   $effect(() => {
     const id = page.params.id;
     untrack(() => {
-      const d = app.tdraft;
-      if (d && (id === "new" ? !d.id : d.id === id)) return;
-      const t = s.tasks.find((x) => x.id === id);
-      if (id !== "new" && !t) return goto("/lists", { replace: true });
-      app.tdraft = t
-        ? $state.snapshot(t)
+      const draft = app.tdraft;
+      if (draft && (id === "new" ? !draft.id : draft.id === id)) return;
+      const task = appState.tasks.find((other) => other.id === id);
+      if (id !== "new" && !task) return goto("/lists", { replace: true });
+      app.tdraft = task
+        ? $state.snapshot(task)
         : { title: "", area: GENERAL, mode: "week", days: [(new Date().getDay() + 6) % 7], every: 2, note: "" };
     });
   });
@@ -32,9 +32,9 @@
   function saveTask() {
     if (!tdraft.title.trim()) return alert("Gib der Aufgabe einen Namen.");
     if (tdraft.mode !== "day" && !tdraft.days.length) return alert("Wähl mindestens einen Wochentag.");
-    const t = { ...$state.snapshot(tdraft), title: tdraft.title.trim() };
-    t.anchor ??= today;
-    mutate({ t: "task", task: { ...t, id: t.id ?? uid() } });
+    const task = { ...$state.snapshot(tdraft), title: tdraft.title.trim() };
+    task.anchor ??= today;
+    mutate({ t: "task", task: { ...task, id: task.id ?? uid() } });
     app.listTab = "home";
     goto("/lists");
   }
@@ -46,15 +46,15 @@
   }
   // Interval weeks count from the day the rhythm was last changed (preview and save use the same anchor).
   const reanchor = () => (tdraft.anchor = today);
-  function setMode(v) {
-    tdraft.mode = v;
+  function setMode(mode) {
+    tdraft.mode = mode;
     reanchor();
-    if (v !== "week") tdraft.days = tdraft.days.slice(0, 1).length ? tdraft.days.slice(0, 1) : [5];
+    if (mode !== "week") tdraft.days = tdraft.days.slice(0, 1).length ? tdraft.days.slice(0, 1) : [5];
   }
-  function pickDay(i) {
+  function pickDay(weekday) {
     reanchor();
-    if (tdraft.mode !== "week") return (tdraft.days = [i]); // interval/month run on one weekday
-    tdraft.days = tdraft.days.includes(i) ? tdraft.days.filter((x) => x !== i) : [...tdraft.days, i];
+    if (tdraft.mode !== "week") return (tdraft.days = [weekday]); // interval/month run on one weekday
+    tdraft.days = tdraft.days.includes(weekday) ? tdraft.days.filter((selected) => selected !== weekday) : [...tdraft.days, weekday];
   }
   const fmtDay = (day) => {
     const str = new Date(day + "T12:00").toLocaleDateString("de-DE", { weekday: "short", day: "numeric", month: "short" });
@@ -79,16 +79,16 @@
     <fieldset class="m-0 flex flex-col gap-2 border-0 p-0">
       <legend class="{sectionLabel} mb-2 p-0">Bereich</legend>
       <div class="flex flex-wrap gap-2">
-        {#each s.areas as a (a.name)}
-          {@const on = areaOf(tdraft.area).name === a.name}
+        {#each appState.areas as area (area.name)}
+          {@const on = areaOf(tdraft.area).name === area.name}
           <button
             aria-pressed={on}
-            onclick={() => (tdraft.area = a.name)}
+            onclick={() => (tdraft.area = area.name)}
             class="flex min-h-11 items-center gap-2 rounded-full pr-4 pl-3 text-[15px] {on
               ? 'border-2 font-semibold'
               : 'border bg-card font-medium'}"
-            style={on ? `border-color: ${a.color}; background: ${pale(a.color)}` : ""}
-            ><span class="size-2.5 rounded-full" style="background: {a.color}"></span>{a.name}</button
+            style={on ? `border-color: ${area.color}; background: ${pale(area.color)}` : ""}
+            ><span class="size-2.5 rounded-full" style="background: {area.color}"></span>{area.name}</button
           >
         {/each}
         <a
@@ -113,12 +113,12 @@
       />
       {#if tdraft.mode !== "day"}
         <div class="grid grid-cols-7 gap-1.5">
-          {#each DAYS as [short, full], i}
-            {@const on = tdraft.days.includes(i)}
+          {#each DAYS as [short, full], weekday}
+            {@const on = tdraft.days.includes(weekday)}
             <button
               aria-pressed={on}
               aria-label={full}
-              onclick={() => pickDay(i)}
+              onclick={() => pickDay(weekday)}
               class="h-11 rounded-full border text-sm font-semibold {on ? 'border-brand bg-brand text-brand-foreground' : 'bg-card'}"
               >{short}</button
             >

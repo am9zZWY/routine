@@ -11,13 +11,13 @@ const fake =
 
 test("parses array wrapped in prose and code fences", async () => {
   const calls = [];
-  const r = await suggest(
+  const result = await suggest(
     "Abends runterkommen",
     [{ text: "Zähne putzen" }],
     cfg,
     fake('Klar!\n```json\n[{"text":"Tee kochen","min":5,"optional":false}]\n```\nViel Spaß', 200, calls),
   );
-  expect(r).toEqual([{ text: "Tee kochen", min: 5, optional: false }]);
+  expect(result).toEqual([{ text: "Tee kochen", min: 5, optional: false }]);
   expect(calls[0][0]).toBe("http://x/v1/chat/completions");
   expect(calls[0][1].headers.Authorization).toBe("Bearer k");
   expect(JSON.parse(calls[0][1].body).messages[1].content).toContain("Zähne putzen");
@@ -32,11 +32,11 @@ test("drops invalid items, clamps min, caps at 8", async () => {
     { text: "x".repeat(121) },
     { min: 3 },
     null,
-    ...Array.from({ length: 10 }, (_, i) => ({ text: `s${i}`, min: 2.6 })),
+    ...Array.from({ length: 10 }, (_unused, index) => ({ text: `s${index}`, min: 2.6 })),
   ];
-  const r = await suggest("g", [], cfg, fake(JSON.stringify(items)));
-  expect(r.length).toBe(8);
-  expect(r.slice(0, 3)).toEqual([
+  const result = await suggest("g", [], cfg, fake(JSON.stringify(items)));
+  expect(result.length).toBe(8);
+  expect(result.slice(0, 3)).toEqual([
     { text: "a", min: 1, optional: false },
     { text: "b", min: 240, optional: true },
     { text: "s0", min: 3, optional: false },

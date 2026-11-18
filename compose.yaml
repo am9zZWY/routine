@@ -3,14 +3,27 @@ services:
     build: .
     image: ghcr.io/am9zzwy/routine:latest # published by .github/workflows/docker-publish.yml
     container_name: routine
-    ports:
-      - "8080:3000"
     environment:
       # Everyone in the household enters this code once (or opens the invite link). Put it in a .env file next to this one.
       HOUSEHOLD_CODE: ${HOUSEHOLD_CODE:?Set HOUSEHOLD_CODE in .env, e.g. HOUSEHOLD_CODE=$(openssl rand -hex 12)}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.todo.rule=Host(`todo.jpkmiller.de`)"
+      - "traefik.http.routers.todo.entrypoints=https"
+      - "traefik.http.routers.todo.tls.certresolver=myresolver"
+      # This is the port todo listens on inside its container
+      - "traefik.http.services.todo.loadbalancer.server.port=3000"
+    networks:
+      - default
+      - web
     volumes:
       - household:/data # household.json: shared tasks, areas and ticks
     restart: unless-stopped
 
 volumes:
   household:
+
+networks:
+  web:
+    external: true

@@ -8,18 +8,22 @@
   import "@fontsource-variable/inter"; // self-hosted, so it works offline
   import "../app.css";
   import { save, evaluate, dayKey, parseShare } from "../logic.js";
-  import { app, stOf, sync, pale, ic } from "#lib/app.svelte.js";
+  import { app, stOf, sync, syncMe, setMeKey, pale, ic } from "#lib/app.svelte.js";
   import { Button } from "#lib/components/ui/button/index.js";
   import * as Drawer from "#lib/components/ui/drawer/index.js";
   import { Clock, House, List, Plus, Sun } from "@lucide/svelte";
 
   let { children } = $props();
-  const s = app.s;
+  const appState = app.state;
 
-  evaluate(s, new Date());
+  evaluate(appState, new Date());
   let saveOk = $state(true);
+  // Save on every change; sync personal data 2 s after the last one (it only uploads if something changed).
+  let meTimer;
   $effect(() => {
-    saveOk = save(s);
+    saveOk = save(appState);
+    clearTimeout(meTimer);
+    meTimer = setTimeout(syncMe, 2000);
   });
   $effect(() => {
     try {
@@ -33,7 +37,7 @@
     const apply = () => {
       const dark = app.theme === "dark" || (app.theme === "system" && mq.matches);
       document.documentElement.classList.toggle("dark", dark);
-      for (const m of document.querySelectorAll('meta[name="theme-color"]')) m.content = dark ? "#141414" : "#fafaf8";
+      for (const metaTag of document.querySelectorAll('meta[name="theme-color"]')) metaTag.content = dark ? "#141414" : "#fafaf8";
     };
     apply();
     mq.addEventListener("change", apply);
@@ -47,13 +51,14 @@
   const notified = new Set();
   function tick() {
     app.now = new Date();
-    evaluate(s, app.now);
+    evaluate(appState, app.now);
     sync();
-    for (const r of s.routines) {
-      const k = r.id + dayKey(app.now);
-      if (stOf(r) === "open" && !notified.has(k)) {
-        notified.add(k);
-        remind(r);
+    syncMe();
+    for (const routine of appState.routines) {
+      const key = routine.id + dayKey(app.now);
+      if (stOf(routine) === "open" && !notified.has(key)) {
+        notified.add(key);
+        remind(routine);
       }
     }
   }
@@ -68,46 +73,49 @@
   function beep() {
     try {
       audio ??= new AudioContext();
-      const o = audio.createOscillator(),
-        g = audio.createGain();
-      o.frequency.value = 880;
-      g.gain.value = 0.2;
-      o.connect(g).connect(audio.destination);
-      o.start();
-      o.stop(audio.currentTime + 0.25);
+      const oscillator = audio.createOscillator(),
+        gain = audio.createGain();
+      oscillator.frequency.value = 880;
+      gain.gain.value = 0.2;
+      oscillator.connect(gain).connect(audio.destination);
+      oscillator.start();
+      oscillator.stop(audio.currentTime + 0.25);
     } catch {}
   }
-  function remind(r) {
-    app.banner = `${r.name} ist jetzt offen`;
+  function remind(routine) {
+    app.banner = `${routine.name} ist jetzt offen`;
     beep();
-    if (r.autoStart && !page.route.id?.startsWith("/routine")) goto(`/run/${r.id}`);
+    if (routine.autoStart && !page.route.id?.startsWith("/routine")) goto(`/run/${routine.id}`);
     if (app.perm !== "granted") return;
     try {
-      new Notification("Routine offen", { body: r.name, icon: "/icon-192.png" });
+      new Notification("Routine offen", { body: routine.name, icon: "/icon-192.png" });
     } catch {
-      navigator.serviceWorker?.getRegistration().then((reg) => reg?.showNotification("Routine offen", { body: r.name })); // Android Chrome
+      navigator.serviceWorker?.getRegistration().then((reg) => reg?.showNotification("Routine offen", { body: routine.name })); // Android Chrome
     }
   }
 
-  // Links into the app that carry data in the hash: #r=<code> (shared routine), #join=<code> (household invite),
-  // and old #/… URLs from before the app had real pages.
+  // Links into the app that carry data in the hash: #r=<code> (shared routine), #join=<code> (household invite,
+  // optionally &me=<key> to connect another device of yours), and old #/… URLs from before the app had real pages.
   const OLD = { edit: "routine", new: "routine/new", routines: "lists" };
   async function onHash() {
-    const h = location.hash;
-    if (h.startsWith("#r=")) {
+    const hash = location.hash;
+    if (hash.startsWith("#r=")) {
       try {
-        app.importDraft = await parseShare(h.slice(3));
+        app.importDraft = await parseShare(hash.slice(3));
         goto("/routine/new", { replace: true });
       } catch {
         app.banner = "Ungültiger Teilen-Link";
         goto("/", { replace: true });
       }
-    } else if (h.startsWith("#join=")) {
-      app.hh.code = decodeURIComponent(h.slice(6));
+    } else if (hash.startsWith("#join=")) {
+      const params = new URLSearchParams(hash.slice(1));
+      app.hh.code = params.get("join");
+      if (/^[0-9a-f]{32}$/.test(params.get("me") ?? "")) setMeKey(params.get("me"));
       goto("/settings", { replace: true });
       sync();
-    } else if (h.startsWith("#/")) {
-      const [name = "", ...rest] = h.slice(2).split("/");
+      syncMe();
+    } else if (hash.startsWith("#/")) {
+      const [name = "", ...rest] = hash.slice(2).split("/");
       goto("/" + [OLD[name] ?? name, ...rest].filter(Boolean).join("/"), { replace: true }).catch(() => goto("/", { replace: true }));
     }
   }
@@ -116,13 +124,13 @@
     if (!dev && "serviceWorker" in navigator) navigator.serviceWorker.register("/service-worker.js");
     tick();
     onHash();
-    const t = setInterval(tick, 30000),
-      c = setInterval(() => (app.now = new Date()), 1000);
+    const tickTimer = setInterval(tick, 30000),
+      clockTimer = setInterval(() => (app.now = new Date()), 1000);
     const vis = () => document.visibilityState === "visible" && tick();
     document.addEventListener("visibilitychange", vis);
     return () => {
-      clearInterval(t);
-      clearInterval(c);
+      clearInterval(tickTimer);
+      clearInterval(clockTimer);
       document.removeEventListener("visibilitychange", vis);
     };
   });
